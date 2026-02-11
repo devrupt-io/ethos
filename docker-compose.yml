@@ -1,0 +1,104 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    profiles: [dev, prod, test]
+
+  chromadb:
+    image: chromadb/chroma:0.6.3
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      ANONYMIZED_TELEMETRY: "false"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    profiles: [dev, prod, test]
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/tests:/app/tests
+      - /app/node_modules
+    env_file: .env
+    environment:
+      NODE_ENV: development
+      POSTGRES_HOST: postgres
+      CHROMA_HOST: chromadb
+    ports:
+      - "${BACKEND_PORT:-23101}:${BACKEND_PORT:-23101}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    profiles: [dev]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - /app/node_modules
+      - /app/.next
+    env_file: .env
+    environment:
+      NODE_ENV: development
+    ports:
+      - "${FRONTEND_PORT:-23100}:3000"
+    depends_on:
+      - backend
+    profiles: [dev]
+
+  # Test services
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}_test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    profiles: [test]
+
+  test-runner:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    env_file: .env
+    environment:
+      NODE_ENV: test
+      POSTGRES_HOST: postgres-test
+      POSTGRES_DB: ${POSTGRES_DB}_test
+      CHROMA_HOST: chromadb
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    command: npm test
+    profiles: [test]
+
+volumes:
+  postgres_data:
+  chroma_data:
