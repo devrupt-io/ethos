@@ -1,0 +1,9 @@
+ethos.devrupt.io {
+	handle /api/* {
+		reverse_proxy 127.0.0.1:23111
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:23110
+	}
+}

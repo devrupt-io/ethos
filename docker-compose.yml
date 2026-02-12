@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -16,6 +17,7 @@ services:
 
   chromadb:
     image: chromadb/chroma:0.6.3
+    restart: unless-stopped
     volumes:
       - chroma_data:/chroma/chroma
     environment:
@@ -41,7 +43,7 @@ services:
       POSTGRES_HOST: postgres
       CHROMA_HOST: chromadb
     ports:
-      - "${BACKEND_PORT:-23101}:${BACKEND_PORT:-23101}"
+      - "127.0.0.1:${BACKEND_PORT:-23101}:${BACKEND_PORT:-23101}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,7 +64,7 @@ services:
     environment:
       NODE_ENV: development
     ports:
-      - "${FRONTEND_PORT:-23100}:3000"
+      - "127.0.0.1:${FRONTEND_PORT:-23100}:3000"
     depends_on:
       - backend
     profiles: [dev]
@@ -98,6 +100,42 @@ services:
         condition: service_healthy
     command: npm test
     profiles: [test]
+
+  # Production services
+  backend-prod:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      POSTGRES_HOST: postgres
+      CHROMA_HOST: chromadb
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-23111}:${BACKEND_PORT:-23111}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    profiles: [prod]
+
+  frontend-prod:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      BACKEND_HOST: backend-prod
+      BACKEND_PORT: ${BACKEND_PORT:-23111}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-23110}:3000"
+    depends_on:
+      - backend-prod
+    profiles: [prod]
 
 volumes:
   postgres_data:

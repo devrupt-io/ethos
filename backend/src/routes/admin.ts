@@ -128,6 +128,9 @@ router.get("/status", async (_req: Request, res: Response) => {
           ? Math.round((Date.now() - workerState.cycleStartedAt) / workerState.totalProcessed / 1000)
           : null,
         cycleStartedAt: workerState.cycleStartedAt ? new Date(workerState.cycleStartedAt).toISOString() : null,
+        cycleTotal: workerState.cycleTotal,
+        cycleCurrent: workerState.cycleCurrent,
+        cyclePhase: workerState.cyclePhase,
       },
       analysis: {
         currentVersion: ANALYSIS_VERSION,

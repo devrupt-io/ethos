@@ -30,6 +30,7 @@ function normalizeConcepts(concepts: string[]): string[] {
 const MAX_AGE_HOURS = parseInt(process.env.HN_MAX_AGE_HOURS || "8");
 const MAX_STORIES = parseInt(process.env.HN_MAX_STORIES || "0"); // 0 = unlimited (process all)
 const MAX_COMMENTS_PER_STORY = parseInt(process.env.HN_MAX_COMMENTS_PER_STORY || "0"); // 0 = unlimited
+const NEW_COMMENTS_BATCH = parseInt(process.env.HN_NEW_COMMENTS_BATCH || "10"); // max new comments to analyze per story per cycle
 const LLM_DELAY_MS = parseInt(process.env.HN_LLM_DELAY_MS || "200"); // delay between LLM calls only
 
 // Worker state exposed for health endpoint
@@ -41,6 +42,9 @@ export const workerState = {
   totalEmbedded: 0,
   currentlyProcessing: null as string | null,
   cycleStartedAt: null as number | null,
+  cycleTotal: 0,
+  cycleCurrent: 0,
+  cyclePhase: null as string | null,
   errors: [] as string[],
 };
 
@@ -132,15 +136,20 @@ async function processStoryOnly(hnId: number): Promise<{ result: "new" | "cached
   return { result: "cached", item };
 }
 
-// Pass 2: Process comments for a story (BFS order from fetchAllComments)
+// Process comments for a story — fetch only top-level kids and limit new analyses per cycle
 async function processStoryComments(item: hn.HNItem): Promise<{ commentsProcessed: number; newComments: number }> {
   let commentsProcessed = 0;
   let newComments = 0;
 
   if (!item.kids || item.kids.length === 0) return { commentsProcessed, newComments };
 
-  const commentItems = await hn.fetchAllComments(item.kids);
-  const toProcess = MAX_COMMENTS_PER_STORY > 0 ? commentItems.slice(0, MAX_COMMENTS_PER_STORY) : commentItems;
+  // Fetch only the direct children (top-level comments) — not the full recursive tree
+  // This keeps per-story work bounded and predictable
+  const topLevelItems = await hn.fetchItems(item.kids);
+  const validComments = topLevelItems.filter(
+    (c): c is hn.HNItem => c !== null && c.type === "comment" && !c.deleted && !c.dead
+  );
+  const toProcess = MAX_COMMENTS_PER_STORY > 0 ? validComments.slice(0, MAX_COMMENTS_PER_STORY) : validComments;
 
   // Build a map of parent comment summaries for context
   const parentSummaryMap = new Map<number, string>();
@@ -164,6 +173,11 @@ async function processStoryComments(item: hn.HNItem): Promise<{ commentsProcesse
       continue;
     }
 
+    // Stop if we've hit the new comments batch limit for this story
+    if (NEW_COMMENTS_BATCH > 0 && newComments >= NEW_COMMENTS_BATCH) {
+      break;
+    }
+
     const parentContext = ci.parent ? parentSummaryMap.get(ci.parent) : undefined;
     const ok = await processComment(ci, item.id, item.title || "", parentContext);
     if (ok) {
@@ -178,7 +192,7 @@ async function processStoryComments(item: hn.HNItem): Promise<{ commentsProcesse
   }
 
   if (newComments > 0) {
-    console.log(`[worker]   └─ story ${item.id}: ${newComments} new comments, ${toProcess.length - newComments} cached`);
+    console.log(`[worker]   └─ story ${item.id}: ${newComments} new comments, ${commentsProcessed - newComments} cached`);
   }
 
   return { commentsProcessed, newComments };
@@ -258,18 +272,21 @@ async function runIngestionCycle(): Promise<{ ingested: number; skipped: number;
   let totalCommentsProcessed = 0;
   let totalNewComments = 0;
 
-  // Pass 1: Process all stories first (no comments) so they appear quickly
-  const storyItems: hn.HNItem[] = [];
+  // Update cycle progress tracking
+  workerState.cycleTotal = toProcess.length;
+  workerState.cycleCurrent = 0;
+  workerState.cyclePhase = "stories+comments";
+
+  // Breadth-first: process each story and its comments together before moving on
   for (const hnId of toProcess) {
+    workerState.cycleCurrent++;
+
     try {
       const { result, item } = await processStoryOnly(hnId);
-      if (item && (result === "new" || result === "cached")) {
-        storyItems.push(item);
-      }
       switch (result) {
         case "new":
           ingested++;
-          console.log(`[worker] ✓ Story ${hnId}: "${workerState.currentlyProcessing}" — analyzed & embedded`);
+          console.log(`[worker] [${workerState.cycleCurrent}/${toProcess.length}] ✓ Story ${hnId}: "${item?.title}" — analyzed & embedded`);
           break;
         case "cached":
           skipped++;
@@ -281,23 +298,30 @@ async function runIngestionCycle(): Promise<{ ingested: number; skipped: number;
           errors++;
           break;
       }
+
+      // Track every story processed (not just new) so avgTimePerStory works
+      workerState.totalProcessed++;
+
+      // Immediately process comments for this story (breadth-first)
+      if (item && (result === "new" || result === "cached")) {
+        try {
+          workerState.currentlyProcessing = `comments for: ${item.title || `story ${item.id}`}`;
+          const { commentsProcessed, newComments } = await processStoryComments(item);
+          totalCommentsProcessed += commentsProcessed;
+          totalNewComments += newComments;
+        } catch (err: any) {
+          console.error(`[worker] Failed to process comments for story ${item.id}: ${err?.message || err}`);
+        }
+      }
+
+      // Log progress every 50 stories
+      if (workerState.cycleCurrent % 50 === 0) {
+        console.log(`[worker] Progress: ${workerState.cycleCurrent}/${toProcess.length} stories, ${ingested} new, ${totalNewComments} new comments`);
+      }
     } catch (err: any) {
       console.error(`[worker] Failed to process story ${hnId}: ${err?.message || err}`);
       errors++;
-    }
-  }
-
-  console.log(`[worker] Pass 1 complete: ${ingested} new stories, ${skipped} cached, ${tooOld} too old. Processing comments for ${storyItems.length} stories...`);
-
-  // Pass 2: Process comments for all recent stories
-  for (const item of storyItems) {
-    try {
-      workerState.currentlyProcessing = item.title || `comments for ${item.id}`;
-      const { commentsProcessed, newComments } = await processStoryComments(item);
-      totalCommentsProcessed += commentsProcessed;
-      totalNewComments += newComments;
-    } catch (err: any) {
-      console.error(`[worker] Failed to process comments for story ${item.id}: ${err?.message || err}`);
+      workerState.totalProcessed++;
     }
   }
 
@@ -314,7 +338,7 @@ export function startBackgroundWorker(): void {
 
   console.log(`[worker] Starting background worker`);
   console.log(`[worker]   poll interval: ${pollInterval / 1000}s, max age: ${MAX_AGE_HOURS}h, max stories: ${MAX_STORIES === 0 ? "unlimited" : MAX_STORIES}`);
-  console.log(`[worker]   max comments/story: ${MAX_COMMENTS_PER_STORY === 0 ? "unlimited" : MAX_COMMENTS_PER_STORY}, LLM delay: ${LLM_DELAY_MS}ms`);
+  console.log(`[worker]   max comments/story: ${MAX_COMMENTS_PER_STORY === 0 ? "unlimited" : MAX_COMMENTS_PER_STORY}, new comment batch: ${NEW_COMMENTS_BATCH}, LLM delay: ${LLM_DELAY_MS}ms`);
   workerState.running = true;
 
   // Run immediately on startup
@@ -340,10 +364,12 @@ async function runCycle(): Promise<void> {
     workerState.lastRunAt = new Date();
     workerState.lastRunResult = result;
     workerState.currentlyProcessing = null;
+    workerState.cyclePhase = null;
     console.log(`[worker] ── Cycle complete in ${elapsed}s: ${result.ingested} new stories, ${result.skipped} cached, ${result.tooOld} too old, ${result.errors} errors, ${result.newComments} new comments (${result.commentsProcessed} total) ──`);
   } catch (err: any) {
     console.error(`[worker] ── Cycle failed: ${err?.message || err} ──`);
     workerState.currentlyProcessing = null;
+    workerState.cyclePhase = null;
     workerState.errors.push(`cycle: ${err?.message || "unknown"}`);
     if (workerState.errors.length > 50) workerState.errors.shift();
   } finally {

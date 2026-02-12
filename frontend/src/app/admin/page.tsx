@@ -25,6 +25,9 @@ interface AdminStatus {
     recentErrors: string[];
     avgTimePerStory: number | null;
     cycleStartedAt: string | null;
+    cycleTotal: number;
+    cycleCurrent: number;
+    cyclePhase: string | null;
   };
   analysis: {
     currentVersion: string;
@@ -255,37 +258,55 @@ export default function AdminPage() {
 
             {/* Progress summary */}
             <div className="mt-4 p-3 bg-gray-900 rounded-lg">
-              <div className="flex items-center justify-between text-sm mb-2">
-                <span className="text-gray-400">Analysis progress</span>
-                <span className="text-gray-300">
-                  {status.data.embeddedStories + status.data.embeddedComments} / {status.data.storyCount + status.data.commentCount} items
-                </span>
-              </div>
-              <div className="h-2 rounded-full bg-gray-800 overflow-hidden mb-2">
-                <div
-                  className="h-full rounded-full bg-blue-500 transition-all"
-                  style={{ width: `${(status.data.storyCount + status.data.commentCount) > 0 ? ((status.data.embeddedStories + status.data.embeddedComments) / (status.data.storyCount + status.data.commentCount) * 100) : 0}%` }}
-                />
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-xs text-gray-500">
-                <div>
-                  <span className="text-gray-400">{status.data.pendingStories}</span> stories pending
-                </div>
-                <div>
-                  <span className="text-gray-400">{status.data.pendingComments}</span> comments pending
-                </div>
-                <div>
-                  {status.worker.avgTimePerStory != null && status.data.pendingStories > 0 ? (
-                    <>ETA: <span className="text-gray-400">~{formatEta(status.data.pendingStories * status.worker.avgTimePerStory)}</span></>
-                  ) : (
-                    status.data.pendingStories === 0 && status.data.pendingComments === 0 ? (
-                      <span className="text-green-400">All caught up</span>
+              {status.worker.cyclePhase && status.worker.cycleTotal > 0 ? (
+                <>
+                  <div className="flex items-center justify-between text-sm mb-2">
+                    <span className="text-gray-400">Cycle progress</span>
+                    <span className="text-gray-300">
+                      {status.worker.cycleCurrent} / {status.worker.cycleTotal} stories
+                    </span>
+                  </div>
+                  <div className="h-2 rounded-full bg-gray-800 overflow-hidden mb-2">
+                    <div
+                      className="h-full rounded-full bg-blue-500 transition-all"
+                      style={{ width: `${(status.worker.cycleCurrent / status.worker.cycleTotal) * 100}%` }}
+                    />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-xs text-gray-500">
+                    <div>
+                      <span className="text-gray-400">{status.data.embeddedStories}</span> stories embedded
+                    </div>
+                    <div>
+                      <span className="text-gray-400">{status.data.embeddedComments}</span> comments embedded
+                    </div>
+                    <div>
+                      {status.worker.avgTimePerStory != null && status.worker.cycleCurrent < status.worker.cycleTotal ? (
+                        <>ETA: <span className="text-gray-400">~{formatEta((status.worker.cycleTotal - status.worker.cycleCurrent) * status.worker.avgTimePerStory)}</span></>
+                      ) : status.worker.cycleCurrent > 0 && status.worker.cycleCurrent < status.worker.cycleTotal ? (
+                        <span className="text-gray-400">{status.worker.cycleTotal - status.worker.cycleCurrent} remaining</span>
+                      ) : (
+                        <span>Processing...</span>
+                      )}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between text-sm mb-2">
+                    <span className="text-gray-400">Total analyzed</span>
+                    <span className="text-gray-300">
+                      {status.data.embeddedStories} stories, {status.data.embeddedComments} comments
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {status.data.pendingStories === 0 && status.data.pendingComments === 0 ? (
+                      <span className="text-green-400">All caught up — waiting for next cycle</span>
                     ) : (
-                      <span>Estimating...</span>
-                    )
-                  )}
-                </div>
-              </div>
+                      <span>{status.data.pendingStories} stories and {status.data.pendingComments} comments pending</span>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Last run result */}

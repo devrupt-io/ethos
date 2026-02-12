@@ -12,7 +12,14 @@ import { startBackgroundWorker } from "./services/ingestion";
 const app = express();
 const PORT = parseInt(process.env.BACKEND_PORT || "23101");
 
-app.use(cors());
+const corsOrigin = process.env.CORS_ORIGIN;
+app.use(
+  cors(
+    corsOrigin
+      ? { origin: corsOrigin, methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"] }
+      : {}
+  )
+);
 app.use(express.json());
 
 // Routes
