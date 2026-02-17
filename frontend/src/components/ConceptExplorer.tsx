@@ -9,8 +9,8 @@ interface Concept {
   storyCount: number;
   commentCount: number;
   avgSentiment: number;
-  recentStories: { title: string; hnId: number; coreIdea: string | null }[];
-  recentComments: { argumentSummary: string | null; by: string | null; commentType: string | null; hnId: number; storyHnId: number }[];
+  recentStories: { title: string; hnId: number; coreIdea: string | null; time: number }[];
+  recentComments: { argumentSummary: string | null; by: string | null; commentType: string | null; hnId: number; storyHnId: number; time: number }[];
   topCommentTypes: { type: string; count: number }[];
   technologies: string[];
 }
@@ -31,10 +31,14 @@ const sentimentBg = (score: number): string => {
   return "bg-gray-800 border-gray-700";
 };
 
+type SortType = "sentiment-positive" | "sentiment-negative" | "recent" | "alphabetical";
+
 export default function ConceptExplorer() {
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortType, setSortType] = useState<SortType>("recent");
 
   useEffect(() => {
     fetch("/api/insights/concepts")
@@ -43,6 +47,31 @@ export default function ConceptExplorer() {
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
+
+  const getRecentDate = (concept: Concept): number => {
+    const storyDates = concept.recentStories.map((s) => s.time * 1000);
+    const commentDates = concept.recentComments.map((c) => c.time * 1000);
+    const allDates = [...storyDates, ...commentDates];
+    return allDates.length > 0 ? Math.max(...allDates) : 0;
+  };
+
+  const sortedAndFilteredConcepts = (() => {
+    let result = concepts.filter(c => 
+      c.name.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
+    if (sortType === "sentiment-positive") {
+      result.sort((a, b) => b.avgSentiment - a.avgSentiment);
+    } else if (sortType === "sentiment-negative") {
+      result.sort((a, b) => a.avgSentiment - b.avgSentiment);
+    } else if (sortType === "recent") {
+      result.sort((a, b) => getRecentDate(b) - getRecentDate(a));
+    } else if (sortType === "alphabetical") {
+      result.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    return result;
+  })();
 
   if (loading) {
     return (
@@ -70,7 +99,7 @@ export default function ConceptExplorer() {
     );
   }
 
-  const maxCount = concepts[0]?.count || 1;
+  const maxCount = sortedAndFilteredConcepts[0]?.count || 1;
 
   return (
     <div>
@@ -79,29 +108,61 @@ export default function ConceptExplorer() {
           What HN is thinking about
         </h2>
         <p className="text-sm text-gray-500 mt-1">
-          Concepts extracted from stories and comments, sized by frequency,
-          colored by sentiment
+          Concepts extracted from stories and comments
         </p>
       </div>
 
-      {/* Concept cloud */}
-      <div className="flex flex-wrap items-center gap-2 mb-8">
-        {concepts.slice(0, 30).map((c) => {
-          const size = Math.max(0.7, Math.min(1.8, (c.count / maxCount) * 1.8));
-          return (
-            <button
-              key={c.name}
-              onClick={() => setExpanded(expanded === c.name ? null : c.name)}
-              className={`px-3 py-1.5 rounded-full border transition-all hover:scale-105 leading-tight ${sentimentBg(c.avgSentiment)} ${
-                expanded === c.name ? "ring-2 ring-blue-400" : ""
-              }`}
-              style={{ fontSize: `${size}rem` }}
-            >
-              <span className={sentimentColor(c.avgSentiment)}>{c.name}</span>
-              <span className="text-gray-500 ml-1 text-xs">{c.count}</span>
-            </button>
-          );
-        })}
+      {/* Search and sort controls */}
+      <div className="mb-6 space-y-3">
+        <input
+          type="text"
+          placeholder="Search concepts..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+        />
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => setSortType("alphabetical")}
+            className={`px-3 py-1.5 text-sm rounded transition-colors ${
+              sortType === "alphabetical"
+                ? "bg-blue-600 text-white"
+                : "bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            Alphabetical
+          </button>
+          <button
+            onClick={() => setSortType("sentiment-positive")}
+            className={`px-3 py-1.5 text-sm rounded transition-colors ${
+              sortType === "sentiment-positive"
+                ? "bg-blue-600 text-white"
+                : "bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            Most Positive
+          </button>
+          <button
+            onClick={() => setSortType("sentiment-negative")}
+            className={`px-3 py-1.5 text-sm rounded transition-colors ${
+              sortType === "sentiment-negative"
+                ? "bg-blue-600 text-white"
+                : "bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            Most Negative
+          </button>
+          <button
+            onClick={() => setSortType("recent")}
+            className={`px-3 py-1.5 text-sm rounded transition-colors ${
+              sortType === "recent"
+                ? "bg-blue-600 text-white"
+                : "bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            Most Recent
+          </button>
+        </div>
       </div>
 
       {/* Expanded concept detail */}
@@ -208,7 +269,7 @@ export default function ConceptExplorer() {
 
       {/* Full concept list */}
       <div className="space-y-2">
-        {concepts.map((c) => (
+        {sortedAndFilteredConcepts.map((c) => (
           <Link
             key={c.name}
             href={`/concepts/${encodeURIComponent(c.name)}`}

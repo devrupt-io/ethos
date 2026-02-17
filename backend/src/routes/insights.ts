@@ -29,8 +29,8 @@ router.get("/concepts", async (_req: Request, res: Response) => {
       commentCount: number;
       sentimentSum: number;
       sentimentCount: number;
-      recentStories: { title: string; hnId: number; coreIdea: string | null }[];
-      recentComments: { argumentSummary: string | null; by: string | null; commentType: string | null; hnId: number; storyHnId: number }[];
+      recentStories: { title: string; hnId: number; coreIdea: string | null; time: number }[];
+      recentComments: { argumentSummary: string | null; by: string | null; commentType: string | null; hnId: number; storyHnId: number; time: number }[];
       commentTypes: Record<string, number>;
       technologies: Record<string, number>;
     }> = {};
@@ -49,7 +49,7 @@ router.get("/concepts", async (_req: Request, res: Response) => {
           conceptMap[key].sentimentCount++;
         }
         if (conceptMap[key].recentStories.length < 3) {
-          conceptMap[key].recentStories.push({ title: story.title, hnId: story.hnId, coreIdea: story.coreIdea });
+          conceptMap[key].recentStories.push({ title: story.title, hnId: story.hnId, coreIdea: story.coreIdea, time: story.time });
         }
       }
     }
@@ -77,6 +77,7 @@ router.get("/concepts", async (_req: Request, res: Response) => {
             commentType: comment.commentType,
             hnId: comment.hnId,
             storyHnId: comment.storyHnId,
+            time: comment.time,
           });
         }
         // Collect technologies from comments
@@ -471,7 +472,7 @@ router.get("/entities", async (_req: Request, res: Response) => {
       commentCount: number;
       sentimentSum: number;
       sentimentCount: number;
-      recentStories: { title: string; hnId: number }[];
+      recentStories: { title: string; hnId: number; time: number }[];
       displayName: string;
     }> = {};
 
@@ -490,7 +491,7 @@ router.get("/entities", async (_req: Request, res: Response) => {
           entityMap[key].sentimentCount++;
         }
         if (entityMap[key].recentStories.length < 3) {
-          entityMap[key].recentStories.push({ title: story.title, hnId: story.hnId });
+          entityMap[key].recentStories.push({ title: story.title, hnId: story.hnId, time: story.time });
         }
       }
     }

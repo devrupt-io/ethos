@@ -46,12 +46,19 @@ function formatEta(seconds: number): string {
   return `${h}h ${m}m`;
 }
 
+function formatNumber(num: number | string): string {
+  const n = typeof num === "string" ? parseInt(num, 10) : num;
+  if (isNaN(n)) return String(num);
+  return n.toLocaleString();
+}
+
 export default function AdminPage() {
   const [token, setToken] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [status, setStatus] = useState<AdminStatus | null>(null);
+  const [storageMetrics, setStorageMetrics] = useState<{ postgres?: { size: string | null }; chromadb?: { status: string; embeddingCount?: number; info?: any } } | null>(null);
   const [loading, setLoading] = useState(false);
   const [regenType, setRegenType] = useState("all");
   const [regenMax, setRegenMax] = useState(50);
@@ -84,9 +91,27 @@ export default function AdminPage() {
     }
   }, [token]);
 
+  const fetchStorageMetrics = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch("/api/admin/storage-metrics", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setStorageMetrics(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch storage metrics:", err);
+    }
+  }, [token]);
+
   useEffect(() => {
-    if (token) fetchStatus();
-  }, [token, fetchStatus]);
+    if (token) {
+      fetchStatus();
+      fetchStorageMetrics();
+    }
+  }, [token, fetchStatus, fetchStorageMetrics]);
 
   // Auto-refresh every 15s
   useEffect(() => {
@@ -216,15 +241,32 @@ export default function AdminPage() {
             />
             <StatusCard
               label="Stories"
-              value={`${status.data.embeddedStories} / ${status.data.storyCount}`}
+              value={`${formatNumber(status.data.embeddedStories)} / ${formatNumber(status.data.storyCount)}`}
               sub="analyzed / total"
             />
             <StatusCard
               label="Comments"
-              value={`${status.data.embeddedComments} / ${status.data.commentCount}`}
+              value={`${formatNumber(status.data.embeddedComments)} / ${formatNumber(status.data.commentCount)}`}
               sub="analyzed / total"
             />
           </div>
+
+          {/* Storage Metrics */}
+          {storageMetrics && (
+            <div className="grid grid-cols-2 md:grid-cols-2 gap-4">
+              <StatusCard
+                label="Postgres Database"
+                value={storageMetrics.postgres?.size || "Unknown"}
+                sub="disk usage"
+              />
+              <StatusCard
+                label="ChromaDB"
+                value={storageMetrics.chromadb?.embeddingCount ? `${formatNumber(storageMetrics.chromadb.embeddingCount)} embeddings` : storageMetrics.chromadb?.status === "connected" ? "Connected" : "Disconnected"}
+                ok={storageMetrics.chromadb?.status === "connected"}
+                sub="embedding storage"
+              />
+            </div>
+          )}
 
           {/* Worker */}
           <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
@@ -274,16 +316,16 @@ export default function AdminPage() {
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-xs text-gray-500">
                     <div>
-                      <span className="text-gray-400">{status.data.embeddedStories}</span> stories embedded
+                      <span className="text-gray-400">{formatNumber(status.data.embeddedStories)}</span> stories embedded
                     </div>
                     <div>
-                      <span className="text-gray-400">{status.data.embeddedComments}</span> comments embedded
+                      <span className="text-gray-400">{formatNumber(status.data.embeddedComments)}</span> comments embedded
                     </div>
                     <div>
                       {status.worker.avgTimePerStory != null && status.worker.cycleCurrent < status.worker.cycleTotal ? (
                         <>ETA: <span className="text-gray-400">~{formatEta((status.worker.cycleTotal - status.worker.cycleCurrent) * status.worker.avgTimePerStory)}</span></>
                       ) : status.worker.cycleCurrent > 0 && status.worker.cycleCurrent < status.worker.cycleTotal ? (
-                        <span className="text-gray-400">{status.worker.cycleTotal - status.worker.cycleCurrent} remaining</span>
+                        <span className="text-gray-400">{formatNumber(status.worker.cycleTotal - status.worker.cycleCurrent)} remaining</span>
                       ) : (
                         <span>Processing...</span>
                       )}
@@ -295,28 +337,42 @@ export default function AdminPage() {
                   <div className="flex items-center justify-between text-sm mb-2">
                     <span className="text-gray-400">Total analyzed</span>
                     <span className="text-gray-300">
-                      {status.data.embeddedStories} stories, {status.data.embeddedComments} comments
+                      {formatNumber(status.data.embeddedStories)} stories, {formatNumber(status.data.embeddedComments)} comments
                     </span>
                   </div>
                   <div className="text-xs text-gray-500">
                     {status.data.pendingStories === 0 && status.data.pendingComments === 0 ? (
                       <span className="text-green-400">All caught up — waiting for next cycle</span>
                     ) : (
-                      <span>{status.data.pendingStories} stories and {status.data.pendingComments} comments pending</span>
+                      <span>{formatNumber(status.data.pendingStories)} stories and {formatNumber(status.data.pendingComments)} comments pending</span>
                     )}
                   </div>
                 </>
               )}
             </div>
 
+            {/* Rate of change */}
+            {status.worker.lastRunResult && (
+              <div className="mt-3 text-xs text-gray-500 grid grid-cols-2 gap-3">
+                <div>
+                  <span className="text-gray-400">Analyzed this cycle</span>
+                  <div className="text-sm font-mono text-blue-400 mt-1">{formatNumber(status.worker.lastRunResult.ingested)}</div>
+                </div>
+                <div>
+                  <span className="text-gray-400">New from HN</span>
+                  <div className="text-sm font-mono text-green-400 mt-1">{formatNumber(status.worker.lastRunResult.skipped)}</div>
+                </div>
+              </div>
+            )}
+
             {/* Last run result */}
             {status.worker.lastRunResult && (
               <div className="mt-3 text-xs text-gray-500 flex gap-4">
-                <span>Last cycle: <span className="text-gray-300">{status.worker.lastRunResult.ingested} new</span></span>
-                <span><span className="text-gray-300">{status.worker.lastRunResult.skipped}</span> cached</span>
-                <span><span className="text-gray-300">{status.worker.lastRunResult.tooOld}</span> too old</span>
+                <span>Last cycle: <span className="text-gray-300">{formatNumber(status.worker.lastRunResult.ingested)} new</span></span>
+                <span><span className="text-gray-300">{formatNumber(status.worker.lastRunResult.skipped)}</span> cached</span>
+                <span><span className="text-gray-300">{formatNumber(status.worker.lastRunResult.tooOld)}</span> too old</span>
                 {status.worker.lastRunResult.errors > 0 && (
-                  <span className="text-red-400">{status.worker.lastRunResult.errors} errors</span>
+                  <span className="text-red-400">{formatNumber(status.worker.lastRunResult.errors)} errors</span>
                 )}
               </div>
             )}
@@ -350,7 +406,7 @@ export default function AdminPage() {
                       <span className={`font-mono ${v === status.analysis.currentVersion ? "text-green-400" : "text-yellow-400"}`}>
                         v{v}
                       </span>
-                      <span className="text-gray-400">{count} stories</span>
+                      <span className="text-gray-400">{formatNumber(count)} stories</span>
                     </div>
                   ))
                 ) : (
@@ -365,7 +421,7 @@ export default function AdminPage() {
                       <span className={`font-mono ${v === status.analysis.currentVersion ? "text-green-400" : "text-yellow-400"}`}>
                         v{v}
                       </span>
-                      <span className="text-gray-400">{count} comments</span>
+                      <span className="text-gray-400">{formatNumber(count)} comments</span>
                     </div>
                   ))
                 ) : (
@@ -375,7 +431,7 @@ export default function AdminPage() {
             </div>
             {(status.analysis.storiesNeedingUpdate > 0 || status.analysis.commentsNeedingUpdate > 0) && (
               <div className="mt-3 text-sm text-yellow-400">
-                ⚠️ {status.analysis.storiesNeedingUpdate} stories and {status.analysis.commentsNeedingUpdate} comments need re-analysis
+                ⚠️ {formatNumber(status.analysis.storiesNeedingUpdate)} stories and {formatNumber(status.analysis.commentsNeedingUpdate)} comments need re-analysis
               </div>
             )}
           </div>
