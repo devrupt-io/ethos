@@ -233,4 +233,51 @@ router.get("/regeneration-status", (_req: Request, res: Response) => {
   res.json({ running: isRegenerationRunning() });
 });
 
+// GET /api/admin/storage-metrics - Get database and ChromaDB storage info
+router.get("/storage-metrics", async (_req: Request, res: Response) => {
+  try {
+    let dbSize = null;
+    let chromaInfo: { embeddingCount?: number; status: string; info?: any } | null = null;
+
+    // Get Postgres database size
+    try {
+      const result = await sequelize.query(
+        "SELECT pg_size_pretty(pg_database_size(current_database())) AS size",
+        { type: "SELECT" as any }
+      );
+      if (result && result.length > 0) {
+        dbSize = (result[0] as any).size;
+      }
+    } catch (err) {
+      console.warn("Failed to get Postgres size:", err);
+    }
+
+    // Get ChromaDB embeddings count
+    try {
+      const storyCollection = await chroma.getStoryCollection();
+      const commentCollection = await chroma.getCommentCollection();
+      
+      const storyCount = await storyCollection.count();
+      const commentCount = await commentCollection.count();
+      const totalEmbeddings = storyCount + commentCount;
+
+      chromaInfo = { 
+        status: "connected", 
+        embeddingCount: totalEmbeddings,
+      };
+    } catch (err) {
+      console.warn("Failed to get ChromaDB stats:", err);
+      chromaInfo = { status: "disconnected", info: null };
+    }
+
+    res.json({
+      postgres: { size: dbSize },
+      chromadb: chromaInfo || { status: "disconnected", info: null },
+    });
+  } catch (error) {
+    console.error("Error fetching storage metrics:", error);
+    res.status(500).json({ error: "Failed to fetch storage metrics" });
+  }
+});
+
 export default router;
